@@ -6,3 +6,4 @@ faiss-cpu
 streamlit
 python-dotenv
 google-generativeai
+pdf2image
