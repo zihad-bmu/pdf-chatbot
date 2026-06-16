@@ -1,22 +1,19 @@
 import os
 import time
 import shutil
-import base64
-from io import BytesIO
 import streamlit as st
-from pdf2image import convert_from_path
-from PIL import Image
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+from langchain_community.document_loaders import PyMuPDFLoader
 
 # ল্যাংচেইনের কোর মডিউলসমূহ
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 
-st.set_page_config(page_title="SaaS PDF Chatbot + Gemini OCR", page_icon="📚", layout="wide")
+st.set_page_config(page_title="SaaS PDF Chatbot Pro", page_icon="📚", layout="wide")
 
 # =====================================================================
 # 📂 STORAGE CONFIGURATION
@@ -52,13 +49,10 @@ embeddings = GoogleGenerativeAIEmbeddings(
 # =====================================================================
 st.markdown("""
 <style>
-/* অ্যাপ ব্যাকগ্রাউন্ড ও গ্লোবাল ফন্ট */
 .stApp { 
     background: linear-gradient(135deg, #0b0914, #121026, #1a1738);
     font-family: 'Inter', system-ui, sans-serif;
 }
-
-/* চ্যাট মেসেজ বাবলস */
 .user-msg {
     background: linear-gradient(135deg, #4f46e5, #7c3aed);
     color: #ffffff !important; padding: 14px 20px; border-radius: 20px 20px 4px 20px;
@@ -74,121 +68,36 @@ st.markdown("""
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     font-size: 0.95rem; line-height: 1.5;
 }
-
-/* হেডারส์ এবং টেক্সট */
 h1 { color: #ffffff !important; text-align: center; font-weight: 800; letter-spacing: -0.5px; }
 .subtitle { color: #9ca3af; text-align: center; margin-bottom: 2.5rem; font-size: 1.1rem; }
-
-/* 📝 চ্যাট ইনপুট বক্স ফিক্স */
 .stTextInput input {
     background-color: #f3f4f6 !important; 
     color: #111827 !important;            
     border: 2px solid rgba(255, 255, 255, 0.1) !important;
-    border-radius: 14px !important; 
-    padding: 12px 20px !important;
-    font-size: 1rem !important;
+    border-radius: 14px !important; padding: 12px 20px !important; font-size: 1rem !important;
 }
-.stTextInput input:focus {
-    border-color: #6366f1 !important;
-    background-color: #ffffff !important;
-}
-
-/* প্রাইমারি অ্যাকশন বাটন */
+.stTextInput input:focus { border-color: #6366f1 !important; background-color: #ffffff !important; }
 .stButton button {
     background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
-    color: white !important; border: none !important;
-    border-radius: 12px !important; font-weight: 600 !important; 
-    padding: 0.6rem 2.2rem !important;
-    transition: all 0.2s ease;
+    color: white !important; border: none !important; border-radius: 12px !important; 
+    font-weight: 600 !important; padding: 0.6rem 2.2rem !important; transition: all 0.2s ease;
 }
-.stButton button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
-}
-
-/* 📊 সাইডবার ডার্ক লুক এবং টেক্সট কাস্টমাইজেশন */
-section[data-testid="stSidebar"] {
-    background-color: #0c0a17 !important;
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-section[data-testid="stSidebar"] h2, 
-section[data-testid="stSidebar"] h3 {
-    color: #ffeb3b !important;
-    font-weight: 700 !important;
-}
-
+.stButton button:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4); }
+section[data-testid="stSidebar"] { background-color: #0c0a17 !important; border-right: 1px solid rgba(255, 255, 255, 0.08); }
+section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color: #ffeb3b !important; font-weight: 700 !important; }
 .file-card {
-    background: rgba(255, 255, 255, 0.04);
-    padding: 12px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #ffffff !important;
-    font-size: 0.9rem;
-    font-weight: 500;
-    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.04); padding: 12px; border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1); color: #ffffff !important; font-size: 0.9rem; font-weight: 500; margin-bottom: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("# 📚 PDF Chatbot Pro")
-st.markdown('<p class="subtitle">SaaS Document AI with Online High-Accuracy Gemini Base64 OCR</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">High-Speed SaaS Document AI Dashboard</p>', unsafe_allow_html=True)
 
 # =====================================================================
-# 🧠 ONLINE CLOUD OCR PIPELINE (Base64 Secures Upload)
+# ⚡ HIGH-SPEED TEXT EXTRACTION PIPELINE (Error-Free)
 # =====================================================================
-def extract_text_via_cloud_ocr(pdf_path, display_name):
-    ocr_model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        google_api_key=api_key,
-        temperature=0.0
-    )
-    
-    documents = []
-    try:
-        pages = convert_from_path(pdf_path, dpi=150)
-        total_pages = len(pages)
-        
-        ocr_progress = st.progress(0, text=f"🔮 Gemini Base64 OCR Active: `{display_name}`...")
-        
-        for idx, page in enumerate(pages):
-            buffered = BytesIO()
-            page.save(buffered, format="PNG")
-            img_bytes = buffered.getvalue()
-            
-            base64_encoded = base64.b64encode(img_bytes).decode("utf-8")
-            data_uri = f"data:image/png;base64,{base64_encoded}"
-            
-            prompt = (
-                "Extract all text from this image exactly as it is. "
-                "If the text is in Bengali, extract it carefully in Bengali Unicode. "
-                "Maintain formatting and paragraphs. Do not add explanations, notes or extra commentary."
-            )
-            
-            message = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_uri}}
-            ]
-            
-            extracted_text = ocr_model.invoke([("user", message)]).content
-            
-            if extracted_text.strip():
-                doc = Document(
-                    page_content=extracted_text,
-                    metadata={"source": display_name, "page": idx + 1}
-                )
-                documents.append(doc)
-                
-            progress_percent = int((idx + 1) / total_pages * 100)
-            ocr_progress.progress(progress_percent, text=f"🔮 Gemini OCR: Extracted page {idx + 1}/{total_pages}")
-            
-        ocr_progress.empty()
-        
-    except Exception as e:
-        st.error(f"Cloud OCR Pipeline Failed: {str(e)}")
-            
-    return documents
-
 def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
     all_documents = []
     
@@ -206,9 +115,17 @@ def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
             f.write(uploaded_file.getbuffer())
             
         st.session_state.file_map[uploaded_file.name] = safe_name
-            
-        loaded_docs = extract_text_via_cloud_ocr(saved_path, uploaded_file.name)
-        all_documents.extend(loaded_docs)
+        
+        # হাই-স্পীড লোডার (Poppler বা OCR এর ঝামেলা মুক্ত)
+        try:
+            loader = PyMuPDFLoader(saved_path)
+            loaded_docs = loader.load()
+            # সোর্স মেটাডেটা ঠিক করা
+            for d in loaded_docs:
+                d.metadata["source"] = uploaded_file.name
+            all_documents.extend(loaded_docs)
+        except Exception as e:
+            st.error(f"Error reading file {uploaded_file.name}: {str(e)}")
         
     if not all_documents:
         return existing_vectorstore
@@ -242,14 +159,13 @@ def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
             except Exception as e:
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     retry_count += 1
-                    time.sleep(5 * retry_count) 
+                    time.sleep(3 * retry_count) 
                 else:
                     st.error(f"Unexpected Pipeline Error: {str(e)}")
                     st.stop()
         
         progress_percent = min(100, int((idx + 1) / total_chunks * 100))
         progress_bar.progress(progress_percent, text=f"🔒 High-Precision Indexing... {idx + 1}/{total_chunks}")
-        time.sleep(0.1)  
             
     progress_bar.empty()  
     
@@ -333,7 +249,7 @@ with st.sidebar:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.last_processed_files]
         
         if new_files:
-            with st.spinner("💾 Gemini Cloud OCR Indexing Active..."):
+            with st.spinner("💾 Syncing Documents to Database..."):
                 st.session_state.vectorstore = process_and_save_pdfs(
                     new_files, 
                     existing_vectorstore=st.session_state.vectorstore
@@ -356,11 +272,10 @@ with st.sidebar:
                 
     if active_files:
         for file in sorted(active_files):
-            col_file, col_btn = st.columns([4, 1.2])
+            col_file, col_btn = st.columns([4, 1.5])
             with col_file:
                 st.markdown(f'<div class="file-card">📁 {file}</div>', unsafe_allow_html=True)
             with col_btn:
-                # ডিলিট বাটন টেক্সটসহ ক্লিয়ার করা হয়েছে স্টাইলিং এরর এড়াতে
                 if st.button("🗑️ Delete", key=f"del_{file}", use_container_width=True):
                     delete_individual_file(file)
                     st.rerun()
@@ -439,7 +354,6 @@ else:
                 "Context:\n{context}"
             )
             
-            # ফিক্স: MessagesPlaceholder চ্যাট হিস্ট্রির সিকোয়েন্স ঠিক রাখবে
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 MessagesPlaceholder("chat_history"),
@@ -462,7 +376,6 @@ else:
                 if source_files and "This information is not available" not in response_text:
                     response_text += f"\n\n📎 **Source:** {', '.join(source_files)}"
                     
-                # চ্যাট হিস্ট্রি আপডেট (যাতে মেমোরি ধরে রাখতে পারে)
                 st.session_state.chat_history.extend([
                     ("human", user_input),
                     ("ai", response_text),
