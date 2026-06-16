@@ -75,7 +75,7 @@ st.markdown("""
     font-size: 0.95rem; line-height: 1.5;
 }
 
-/* হেডার্স এবং টেক্সট */
+/* হেডারส์ এবং টেক্সট */
 h1 { color: #ffffff !important; text-align: center; font-weight: 800; letter-spacing: -0.5px; }
 .subtitle { color: #9ca3af; text-align: center; margin-bottom: 2.5rem; font-size: 1.1rem; }
 
@@ -112,14 +112,12 @@ section[data-testid="stSidebar"] {
     border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* সাইডবার হেডারসমূহ হলুদ (Yellow) কালার */
 section[data-testid="stSidebar"] h2, 
 section[data-testid="stSidebar"] h3 {
     color: #ffeb3b !important;
     font-weight: 700 !important;
 }
 
-/* ফাইল কার্ড স্টাইল - টেক্সট সম্পূর্ণ সাদা */
 .file-card {
     background: rgba(255, 255, 255, 0.04);
     padding: 12px;
@@ -128,27 +126,7 @@ section[data-testid="stSidebar"] h3 {
     color: #ffffff !important;
     font-size: 0.9rem;
     font-weight: 500;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
     margin-bottom: 10px;
-}
-
-/* 🗑️ অ্যানিমেটেড আইকন-অনলি ডিলিট বাটন */
-div.stButton > button[key^="del_"] {
-    background: transparent !important;
-    color: #ff4d4d !important;
-    border: none !important;
-    padding: 2px 6px !important;
-    font-size: 1.2rem !important;
-    cursor: pointer;
-    transition: transform 0.2s ease, color 0.2s ease;
-    width: auto !important;
-}
-div.stButton > button[key^="del_"]:hover {
-    transform: scale(1.2) rotate(5deg);
-    color: #ff1a1a !important;
-    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -239,7 +217,7 @@ def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
     chunks = text_splitter.split_documents(all_documents)
     
     if not chunks:
-        st.error("🚨 PDF থেকে কোনো টেক্সট উদ্ধার করা সম্ভব হয়নি।")
+        st.error("🚨 PDF থেকে কোনো টেক্সট উদ্ধার করা সম্ভব হয়নি।")
         return existing_vectorstore
         
     vectorstore = existing_vectorstore
@@ -378,13 +356,12 @@ with st.sidebar:
                 
     if active_files:
         for file in sorted(active_files):
-            # ফাইল রো এবং আইকন অনলি বাটন পাশাপাশি সেটআপ
-            col_file, col_btn = st.columns([5, 1])
+            col_file, col_btn = st.columns([4, 1.2])
             with col_file:
                 st.markdown(f'<div class="file-card">📁 {file}</div>', unsafe_allow_html=True)
             with col_btn:
-                # আইকন অনলি ডিলিট বাটন (অ্যানিমেটেড)
-                if st.button("🗑️", key=f"del_{file}"):
+                # ডিলিট বাটন টেক্সটসহ ক্লিয়ার করা হয়েছে স্টাইলিং এরর এড়াতে
+                if st.button("🗑️ Delete", key=f"del_{file}", use_container_width=True):
                     delete_individual_file(file)
                     st.rerun()
     else:
@@ -392,7 +369,7 @@ with st.sidebar:
         
     st.markdown("---")
     
-    if st.button("🚨 Wipe All Files & Reset", key="global_reset"):
+    if st.button("🚨 Wipe All Files & Reset", key="global_reset", use_container_width=True):
         if os.path.exists(UPLOAD_DIR):
             shutil.rmtree(UPLOAD_DIR)
         if os.path.exists(VECTOR_DB_DIR):
@@ -441,7 +418,8 @@ else:
         with col2:
             submit_button = st.form_submit_button(
                 label="Send ➤",
-                type="primary"
+                type="primary",
+                use_container_width=True
             )
 
     if submit_button and user_input:
@@ -461,6 +439,7 @@ else:
                 "Context:\n{context}"
             )
             
+            # ফিক্স: MessagesPlaceholder চ্যাট হিস্ট্রির সিকোয়েন্স ঠিক রাখবে
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 MessagesPlaceholder("chat_history"),
@@ -480,9 +459,10 @@ else:
                     doc.metadata.get("source", "unknown").split("\\")[-1].split("/")[-1]
                     for doc in reterived_docs
                 ]))
-                if source_files and "not available" not in response_text:
+                if source_files and "This information is not available" not in response_text:
                     response_text += f"\n\n📎 **Source:** {', '.join(source_files)}"
                     
+                # চ্যাট হিস্ট্রি আপডেট (যাতে মেমোরি ধরে রাখতে পারে)
                 st.session_state.chat_history.extend([
                     ("human", user_input),
                     ("ai", response_text),
@@ -490,7 +470,7 @@ else:
                 
             except Exception as net_error:
                 response_text = (
-                    "⚠️ **Network Timeout Error:** গুগলের সার্ভারের সাথে সংযোগ সাময়িকভাবে বিচ্ছিন্ন হয়ে গেছে।"
+                    "⚠️ **Network Timeout Error:** গুগলের সার্ভারের সাথে সংযোগ সাময়িকভাবে বিচ্ছিন্ন হয়ে গেছে।"
                 )
 
         st.session_state.messages.append({"role": "assistant", "content": response_text})
