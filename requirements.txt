@@ -1,9 +1,9 @@
+streamlit
 langchain
 langchain-community
 langchain-google-genai
-pymupdf
+langchain-text-splitters
 faiss-cpu
-streamlit
-python-dotenv
-google-generativeai
 pdf2image
+pillow
+python-dotenv
