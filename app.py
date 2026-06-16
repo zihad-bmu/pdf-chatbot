@@ -1,28 +1,21 @@
 import os
+import io
 import time
-import shutil
 import streamlit as st
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_community.document_loaders import PyMuPDFLoader
 
 # ল্যাংচেইনের কোর মডিউলসমূহ
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 
+# ইন-মেমোরি পিডিএফ রিড করার জন্য লাইব্রেরি (PyMuPDF / fitz)
+import fitz  
+
 st.set_page_config(page_title="SaaS PDF Chatbot Pro", page_icon="📚", layout="wide")
-
-# =====================================================================
-# 📂 STORAGE CONFIGURATION
-# =====================================================================
-UPLOAD_DIR = "uploaded_pdfs"       
-VECTOR_DB_DIR = "faiss_index_db"   
-
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
 
 # =====================================================================
 # 🔐 SYSTEM CONFIGURATION & SECURITY FALLBACK
@@ -93,93 +86,64 @@ section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color
 """, unsafe_allow_html=True)
 
 st.markdown("# 📚 PDF Chatbot Pro")
-st.markdown('<p class="subtitle">High-Speed SaaS Document AI Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">In-Memory Ultra-Fast SaaS Document AI Dashboard</p>', unsafe_allow_html=True)
 
 # =====================================================================
-# ⚡ HIGH-SPEED TEXT EXTRACTION PIPELINE (Linux Safe Path Setup)
+# ⚡ IN-MEMORY TEXT EXTRACTION (No Disk Write, 100% Permission Safe)
 # =====================================================================
-def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
+def process_pdfs_in_memory(uploaded_files, existing_vectorstore=None):
     all_documents = []
     
-    if "file_map" not in st.session_state:
-        st.session_state.file_map = {}
-
-    for idx_f, uploaded_file in enumerate(uploaded_files):
-        if uploaded_file.name in st.session_state.file_map:
-            continue
-            
-        # ফিক্স: লিনাক্স ওএস এর এরর এড়াতে সম্পূর্ণ ইংরেজি ও ইউনিক নাম ব্যবহার
-        safe_name = f"secure_file_{idx_f}_{int(time.time())}.pdf"
-        saved_path = os.path.join(UPLOAD_DIR, safe_name)
-        
-        with open(saved_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-            
-        st.session_state.file_map[uploaded_file.name] = safe_name
-        
+    for uploaded_file in uploaded_files:
         try:
-            loader = PyMuPDFLoader(saved_path)
-            loaded_docs = loader.load()
+            # ফাইল ডিস্কে সেভ না করে সরাসরি র‍্যাম মেমোরি থেকে রিড করা হচ্ছে
+            file_bytes = uploaded_file.read()
+            pdf_stream = io.BytesIO(file_bytes)
             
-            # সোর্স মেটাডেটাতে আসল (বাংলা/স্পেসযুক্ত) নাম রেখে দেওয়া হচ্ছে ট্র্যাকিং এর জন্য
-            for d in loaded_docs:
-                d.metadata["source"] = uploaded_file.name
-            all_documents.extend(loaded_docs)
+            doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                text = page.get_text()
+                if text.strip():
+                    all_documents.append(Document(
+                        page_content=text,
+                        metadata={"source": uploaded_file.name, "page": page_num + 1}
+                    ))
+            doc.close()
         except Exception as e:
-            st.error(f"Error reading file {uploaded_file.name}: {str(e)}")
-        
+            st.error(f"Error parsing {uploaded_file.name}: {str(e)}")
+            
     if not all_documents:
         return existing_vectorstore
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
     chunks = text_splitter.split_documents(all_documents)
     
     if not chunks:
-        st.error("🚨 PDF থেকে কোনো টেক্সট উদ্ধার করা সম্ভব হয়নি।")
+        st.error("🚨 PDF থেকে কোনো টেক্সট পাওয়া যায়নি।")
         return existing_vectorstore
         
     vectorstore = existing_vectorstore
-    total_chunks = len(chunks)
     
-    progress_bar = st.progress(0, text="Initializing Database Sync...")
+    progress_bar = st.progress(0, text="Synchronizing In-Memory Database...")
     
-    for idx, chunk in enumerate(chunks):
-        if not chunk.page_content.strip():
-            continue
-            
-        success = False
-        retry_count = 0
-        
-        while not success and retry_count < 5:
-            try:
-                if vectorstore is None:
-                    vectorstore = FAISS.from_documents([chunk], embeddings)
-                else:
-                    vectorstore.add_documents([chunk])
-                success = True
-            except Exception as e:
-                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    retry_count += 1
-                    time.sleep(3 * retry_count) 
-                else:
-                    st.error(f"Unexpected Pipeline Error: {str(e)}")
-                    st.stop()
-        
-        progress_percent = min(100, int((idx + 1) / total_chunks * 100))
-        progress_bar.progress(progress_percent, text=f"🔒 High-Precision Indexing... {idx + 1}/{total_chunks}")
+    try:
+        if vectorstore is None:
+            vectorstore = FAISS.from_documents(chunks, embeddings)
+        else:
+            vectorstore.add_documents(chunks)
+        progress_bar.progress(100, text="🔒 Memory Indexing Complete!")
+        time.sleep(0.5)
+    except Exception as e:
+        st.error(f"🚨 Indexing Failed: {str(e)}")
+        return existing_vectorstore
             
     progress_bar.empty()  
-    
-    if vectorstore:
-        vectorstore.save_local(VECTOR_DB_DIR)
-        
     return vectorstore
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
 # =====================================================================
-# 🗑️ INDIVIDUAL FILE DELETION LOGIC
+# 🗑️ IN-MEMORY INDIVIDUAL FILE DELETION LOGIC
 # =====================================================================
 def delete_individual_file(filename_to_delete):
     if st.session_state.vectorstore is not None:
@@ -194,43 +158,24 @@ def delete_individual_file(filename_to_delete):
         
         if ids_to_delete:
             st.session_state.vectorstore.delete(ids_to_delete)
-            st.session_state.vectorstore.save_local(VECTOR_DB_DIR)
             
-        if "file_map" in st.session_state and filename_to_delete in st.session_state.file_map:
-            safe_name = st.session_state.file_map[filename_to_delete]
-            file_path = os.path.join(UPLOAD_DIR, safe_name)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            del st.session_state.file_map[filename_to_delete]
-            
-        if "last_processed_files" in st.session_state and filename_to_delete in st.session_state.last_processed_files:
-            st.session_state.last_processed_files.remove(filename_to_delete)
+        if filename_to_delete in st.session_state.uploaded_file_names:
+            st.session_state.uploaded_file_names.remove(filename_to_delete)
 
         if not st.session_state.vectorstore.index_to_docstore_id:
-            if os.path.exists(VECTOR_DB_DIR):
-                shutil.rmtree(VECTOR_DB_DIR)
             st.session_state.vectorstore = None
 
 # =====================================================================
-# 💾 PERSISTENT STATE MANAGEMENT
+# 💾 STATE MANAGEMENT
 # =====================================================================
 if "vectorstore" not in st.session_state:
-    if os.path.exists(VECTOR_DB_DIR):
-        try:
-            st.session_state.vectorstore = FAISS.load_local(
-                VECTOR_DB_DIR, embeddings, allow_dangerous_deserialization=True
-            )
-        except Exception:
-            st.session_state.vectorstore = None
-    else:
-        st.session_state.vectorstore = None
-
+    st.session_state.vectorstore = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "last_processed_files" not in st.session_state:
-    st.session_state.last_processed_files = []
+if "uploaded_file_names" not in st.session_state:
+    st.session_state.uploaded_file_names = []
 
 # =====================================================================
 # 🎛️ SIDEBAR CONTROL PANEL
@@ -246,17 +191,17 @@ with st.sidebar:
     )
     
     if uploaded_files:
-        current_file_names = [f.name for f in uploaded_files]
-        new_files = [f for f in uploaded_files if f.name not in st.session_state.last_processed_files]
+        new_files = [f for f in uploaded_files if f.name not in st.session_state.uploaded_file_names]
         
         if new_files:
-            with st.spinner("💾 Syncing Documents to Database..."):
-                st.session_state.vectorstore = process_and_save_pdfs(
+            with st.spinner("💾 Syncing Documents to Memory..."):
+                st.session_state.vectorstore = process_pdfs_in_memory(
                     new_files, 
                     existing_vectorstore=st.session_state.vectorstore
                 )
-            st.session_state.last_processed_files = current_file_names
-            st.success("✅ Database updated!")
+            for f in new_files:
+                st.session_state.uploaded_file_names.append(f.name)
+            st.success("✅ Memory Database updated!")
             st.rerun()
 
     st.markdown("---")
@@ -286,18 +231,11 @@ with st.sidebar:
     st.markdown("---")
     
     if st.button("🚨 Wipe All Files & Reset", key="global_reset", use_container_width=True):
-        if os.path.exists(UPLOAD_DIR):
-            shutil.rmtree(UPLOAD_DIR)
-        if os.path.exists(VECTOR_DB_DIR):
-            shutil.rmtree(VECTOR_DB_DIR)
-        
         st.session_state.messages = []
         st.session_state.chat_history = []
         st.session_state.vectorstore = None
-        st.session_state.last_processed_files = []
-        if "file_map" in st.session_state:
-            st.session_state.file_map = {}
-        st.success("All storage cleared!")
+        st.session_state.uploaded_file_names = []
+        st.success("All temporary storage cleared!")
         st.rerun()
 
 # =====================================================================
@@ -342,28 +280,28 @@ else:
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         with st.spinner("Thinking..."):
-            reterived_docs = retriever.invoke(user_input)
-            context = format_docs(reterived_docs)
-            
-            system_prompt = (
-                "You are a professional, high-precision Document AI Assistant.\n"
-                "Answer the question strictly based on the provided PDF context below.\n"
-                "If the answer cannot be derived from the context, respond exactly with:\n"
-                "'This information is not available in the provided documents.'\n"
-                "Do not answer anything outside the document scope.\n"
-                "Respond in Bengali if the user asks in Bengali, otherwise in English.\n\n"
-                "Context:\n{context}"
-            )
-            
-            qa_prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ])
-            
-            rag_chain = qa_prompt | llm | StrOutputParser()
-            
             try:
+                reterived_docs = retriever.invoke(user_input)
+                context = "\n\n".join(doc.page_content for doc in reterived_docs)
+                
+                system_prompt = (
+                    "You are a professional, high-precision Document AI Assistant.\n"
+                    "Answer the question strictly based on the provided PDF context below.\n"
+                    "If the answer cannot be derived from the context, respond exactly with:\n"
+                    "'This information is not available in the provided documents.'\n"
+                    "Do not answer anything outside the document scope.\n"
+                    "Respond in Bengali if the user asks in Bengali, otherwise in English.\n\n"
+                    "Context:\n{context}"
+                )
+                
+                qa_prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    MessagesPlaceholder("chat_history"),
+                    ("human", "{input}"),
+                ])
+                
+                rag_chain = qa_prompt | llm | StrOutputParser()
+                
                 response_text = rag_chain.invoke({
                     "context": context,
                     "input": user_input,
@@ -371,8 +309,7 @@ else:
                 })
                 
                 source_files = list(set([
-                    doc.metadata.get("source", "unknown").split("\\")[-1].split("/")[-1]
-                    for doc in reterived_docs
+                    doc.metadata.get("source", "unknown") for doc in reterived_docs
                 ]))
                 if source_files and "This information is not available" not in response_text:
                     response_text += f"\n\n📎 **Source:** {', '.join(source_files)}"
@@ -381,11 +318,8 @@ else:
                     ("human", user_input),
                     ("ai", response_text),
                 ])
-                
-            except Exception as net_error:
-                response_text = (
-                    "⚠️ **Network Timeout Error:** গুগলের সার্ভারের সাথে সংযোগ সাময়িকভাবে বিচ্ছিন্ন হয়ে গেছে।"
-                )
+            except Exception as e:
+                response_text = f"⚠️ Error generating response: {str(e)}"
 
         st.session_state.messages.append({"role": "assistant", "content": response_text})
         st.rerun()
