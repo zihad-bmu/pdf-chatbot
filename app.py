@@ -96,7 +96,7 @@ st.markdown("# 📚 PDF Chatbot Pro")
 st.markdown('<p class="subtitle">High-Speed SaaS Document AI Dashboard</p>', unsafe_allow_html=True)
 
 # =====================================================================
-# ⚡ HIGH-SPEED TEXT EXTRACTION PIPELINE (Error-Free)
+# ⚡ HIGH-SPEED TEXT EXTRACTION PIPELINE (Linux Safe Path Setup)
 # =====================================================================
 def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
     all_documents = []
@@ -108,7 +108,8 @@ def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
         if uploaded_file.name in st.session_state.file_map:
             continue
             
-        safe_name = f"safe_file_{idx_f}_{int(time.time())}.pdf"
+        # ফিক্স: লিনাক্স ওএস এর এরর এড়াতে সম্পূর্ণ ইংরেজি ও ইউনিক নাম ব্যবহার
+        safe_name = f"secure_file_{idx_f}_{int(time.time())}.pdf"
         saved_path = os.path.join(UPLOAD_DIR, safe_name)
         
         with open(saved_path, "wb") as f:
@@ -116,11 +117,11 @@ def process_and_save_pdfs(uploaded_files, existing_vectorstore=None):
             
         st.session_state.file_map[uploaded_file.name] = safe_name
         
-        # হাই-স্পীড লোডার (Poppler বা OCR এর ঝামেলা মুক্ত)
         try:
             loader = PyMuPDFLoader(saved_path)
             loaded_docs = loader.load()
-            # সোর্স মেটাডেটা ঠিক করা
+            
+            # সোর্স মেটাডেটাতে আসল (বাংলা/স্পেসযুক্ত) নাম রেখে দেওয়া হচ্ছে ট্র্যাকিং এর জন্য
             for d in loaded_docs:
                 d.metadata["source"] = uploaded_file.name
             all_documents.extend(loaded_docs)
@@ -272,7 +273,7 @@ with st.sidebar:
                 
     if active_files:
         for file in sorted(active_files):
-            col_file, col_btn = st.columns([4, 1.5])
+            col_file, col_btn = st.columns([3.8, 1.7])
             with col_file:
                 st.markdown(f'<div class="file-card">📁 {file}</div>', unsafe_allow_html=True)
             with col_btn:
