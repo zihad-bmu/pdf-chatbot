@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 
-# ইন-মেমোরি পিডিএফ রিড করার জন্য লাইব্রেরি (PyMuPDF / fitz)
+# ইন-মেমোরি পিডিএফ রিড করার জন্য লাইব্রেরি
 import fitz  
 
 st.set_page_config(page_title="SaaS PDF Chatbot Pro", page_icon="📚", layout="wide")
@@ -86,20 +86,30 @@ section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color
 """, unsafe_allow_html=True)
 
 st.markdown("# 📚 PDF Chatbot Pro")
-st.markdown('<p class="subtitle">In-Memory Ultra-Fast SaaS Document AI Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">State-Locked In-Memory SaaS Document AI</p>', unsafe_allow_html=True)
 
 # =====================================================================
-# ⚡ IN-MEMORY TEXT EXTRACTION (No Disk Write, 100% Permission Safe)
+# 💾 STATE MANAGEMENT INITIALIZATION (Persistent Across Reruns)
 # =====================================================================
-def process_pdfs_in_memory(uploaded_files, existing_vectorstore=None):
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "uploaded_file_names" not in st.session_state:
+    st.session_state.uploaded_file_names = []
+
+# =====================================================================
+# ⚡ IN-MEMORY TEXT EXTRACTION PIPELINE (No Disk Permissions Needed)
+# =====================================================================
+def process_pdfs_in_memory(uploaded_files):
     all_documents = []
     
     for uploaded_file in uploaded_files:
         try:
-            # ফাইল ডিস্কে সেভ না করে সরাসরি র‍্যাম মেমোরি থেকে রিড করা হচ্ছে
             file_bytes = uploaded_file.read()
             pdf_stream = io.BytesIO(file_bytes)
-            
             doc = fitz.open(stream=pdf_stream, filetype="pdf")
             
             for page_num in range(len(doc)):
@@ -115,35 +125,32 @@ def process_pdfs_in_memory(uploaded_files, existing_vectorstore=None):
             st.error(f"Error parsing {uploaded_file.name}: {str(e)}")
             
     if not all_documents:
-        return existing_vectorstore
+        return st.session_state.vectorstore
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
     chunks = text_splitter.split_documents(all_documents)
     
     if not chunks:
         st.error("🚨 PDF থেকে কোনো টেক্সট পাওয়া যায়নি।")
-        return existing_vectorstore
+        return st.session_state.vectorstore
         
-    vectorstore = existing_vectorstore
-    
-    progress_bar = st.progress(0, text="Synchronizing In-Memory Database...")
+    progress_bar = st.progress(0, text="Synchronizing State-Locked Database...")
     
     try:
-        if vectorstore is None:
-            vectorstore = FAISS.from_documents(chunks, embeddings)
+        if st.session_state.vectorstore is None:
+            st.session_state.vectorstore = FAISS.from_documents(chunks, embeddings)
         else:
-            vectorstore.add_documents(chunks)
+            st.session_state.vectorstore.add_documents(chunks)
         progress_bar.progress(100, text="🔒 Memory Indexing Complete!")
         time.sleep(0.5)
     except Exception as e:
         st.error(f"🚨 Indexing Failed: {str(e)}")
-        return existing_vectorstore
             
     progress_bar.empty()  
-    return vectorstore
+    return st.session_state.vectorstore
 
 # =====================================================================
-# 🗑️ IN-MEMORY INDIVIDUAL FILE DELETION LOGIC
+# 🗑️ INDIVIDUAL FILE DELETION LOGIC
 # =====================================================================
 def delete_individual_file(filename_to_delete):
     if st.session_state.vectorstore is not None:
@@ -166,18 +173,6 @@ def delete_individual_file(filename_to_delete):
             st.session_state.vectorstore = None
 
 # =====================================================================
-# 💾 STATE MANAGEMENT
-# =====================================================================
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "uploaded_file_names" not in st.session_state:
-    st.session_state.uploaded_file_names = []
-
-# =====================================================================
 # 🎛️ SIDEBAR CONTROL PANEL
 # =====================================================================
 with st.sidebar:
@@ -194,30 +189,18 @@ with st.sidebar:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.uploaded_file_names]
         
         if new_files:
-            with st.spinner("💾 Syncing Documents to Memory..."):
-                st.session_state.vectorstore = process_pdfs_in_memory(
-                    new_files, 
-                    existing_vectorstore=st.session_state.vectorstore
-                )
+            with st.spinner("💾 Syncing Documents..."):
+                process_pdfs_in_memory(new_files)
             for f in new_files:
                 st.session_state.uploaded_file_names.append(f.name)
-            st.success("✅ Memory Database updated!")
+            st.success("✅ Database updated!")
             st.rerun()
 
     st.markdown("---")
     st.markdown("### 📄 Currently Saved Files:")
     
-    active_files = set()
-    if st.session_state.vectorstore is not None:
-        index_to_id = st.session_state.vectorstore.index_to_docstore_id
-        docstore = st.session_state.vectorstore.docstore
-        for doc_id in index_to_id.values():
-            doc = docstore.search(doc_id)
-            if doc and "source" in doc.metadata:
-                active_files.add(doc.metadata["source"])
-                
-    if active_files:
-        for file in sorted(active_files):
+    if st.session_state.uploaded_file_names and st.session_state.vectorstore is not None:
+        for file in sorted(list(set(st.session_state.uploaded_file_names))):
             col_file, col_btn = st.columns([3.8, 1.7])
             with col_file:
                 st.markdown(f'<div class="file-card">📁 {file}</div>', unsafe_allow_html=True)
