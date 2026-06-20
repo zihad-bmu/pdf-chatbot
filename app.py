@@ -1,37 +1,45 @@
 import os
 import io
 import time
+import base64
 import streamlit as st
+import fitz  # PyMuPDF (In-Memory Data Handling & Canvas Rendering)
+from PIL import Image
+from supabase import create_client, Client
 
+# LangChain Modules
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-
-# ল্যাংচেইনের কোর মডিউলসমূহ
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-
-# ইন-মেমোরি পিডিএফ রিড করার জন্য লাইব্রেরি
-import fitz  
 
 st.set_page_config(page_title="SaaS PDF Chatbot Pro", page_icon="📚", layout="wide")
 
 # =====================================================================
 # 🔐 SYSTEM CONFIGURATION & SECURITY FALLBACK
 # =====================================================================
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-else:
+supabase_url = st.secrets.get("SUPABASE_URL")
+supabase_key = st.secrets.get("SUPABASE_KEY")
+api_key = st.secrets.get("GOOGLE_API_KEY")
+
+# Local environment fallback for development
+if not api_key or not supabase_url or not supabase_key:
     from dotenv import load_dotenv
     load_dotenv()
     api_key = os.getenv("GOOGLE_API_KEY")
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
 
-if not api_key:
-    st.error("🚨 Critical Error: API Key missing! Please set your GOOGLE_API_KEY in .streamlit/secrets.toml")
+if not supabase_url or not supabase_key or not api_key:
+    st.error("🚨 Critical Error: Missing API Credentials (GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY) in Secrets/Env!")
     st.stop()
 
-# এমবেডিংস মডেল ইনিশিয়ালাইজেশন
+# Supabase Client Initialization
+supabase: Client = create_client(supabase_url, supabase_key)
+
+# Embeddings Model Initialization
 embeddings = GoogleGenerativeAIEmbeddings(
     model="gemini-embedding-2-preview",
     google_api_key=api_key
@@ -46,6 +54,12 @@ st.markdown("""
     background: linear-gradient(135deg, #0b0914, #121026, #1a1738);
     font-family: 'Inter', system-ui, sans-serif;
 }
+.auth-box {
+    background: rgba(255, 255, 255, 0.04); padding: 35px; border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08); max-width: 460px; margin: 60px auto; color: white;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.auth-header { color: #ffeb3b; text-align: center; font-weight: bold; margin-bottom: 25px; }
 .user-msg {
     background: linear-gradient(135deg, #4f46e5, #7c3aed);
     color: #ffffff !important; padding: 14px 20px; border-radius: 20px 20px 4px 20px;
@@ -65,7 +79,7 @@ h1 { color: #ffffff !important; text-align: center; font-weight: 800; letter-spa
 .subtitle { color: #9ca3af; text-align: center; margin-bottom: 2.5rem; font-size: 1.1rem; }
 .stTextInput input {
     background-color: #f3f4f6 !important; 
-    color: #111827 !important;            
+    color: #111827 !important;             
     border: 2px solid rgba(255, 255, 255, 0.1) !important;
     border-radius: 14px !important; padding: 12px 20px !important; font-size: 1rem !important;
 }
@@ -85,12 +99,52 @@ section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("# 📚 PDF Chatbot Pro")
-st.markdown('<p class="subtitle">State-Locked In-Memory SaaS Document AI</p>', unsafe_allow_html=True)
+# =====================================================================
+# 👤 USER AUTHENTICATION ROUTING (Supabase Gateway)
+# =====================================================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user_info" not in st.session_state:
+    st.session_state.user_info = None
+
+if not st.session_state.logged_in:
+    st.markdown("<h1 style='text-align: center;'>📚 SaaS Document AI Portal</h1>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🔒 Account Login", "📝 Register User"])
+    
+    with tab1:
+        st.markdown('<div class="auth-box">', unsafe_allow_html=True)
+        st.markdown('<h3 class="auth-header">Sign In to Dashboard</h3>', unsafe_allow_html=True)
+        login_email = st.text_input("Email", key="l_email")
+        login_password = st.text_input("Password", type="password", key="l_pwd")
+        if st.button("Access Engine", key="l_btn", type="primary"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                st.session_state.logged_in = True
+                st.session_state.user_info = res.user
+                st.rerun()
+            except Exception as e:
+                st.error(f"Authentication Failed: {str(e)}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    with tab2:
+        st.markdown('<div class="auth-box">', unsafe_allow_html=True)
+        st.markdown('<h3 class="auth-header">Create Commercial Account</h3>', unsafe_allow_html=True)
+        reg_email = st.text_input("Email", key="r_email")
+        reg_password = st.text_input("Password (Min 6 Characters)", type="password", key="r_pwd")
+        if st.button("Sign Up Now", key="r_btn"):
+            try:
+                res = supabase.auth.sign_up({"email": reg_email, "password": reg_password})
+                st.info("✉️ Activation email dispatched! Please check your spam/inbox to verify.")
+            except Exception as e:
+                st.error(f"Registration Failed: {str(e)}")
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
 
 # =====================================================================
-# 💾 STATE MANAGEMENT INITIALIZATION (Persistent Across Reruns)
+# 💾 STATE MANAGEMENT INITIALIZATION (Multi-Tenant Architecture)
 # =====================================================================
+USER_ID = st.session_state.user_info.id
+
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 if "messages" not in st.session_state:
@@ -100,10 +154,14 @@ if "chat_history" not in st.session_state:
 if "uploaded_file_names" not in st.session_state:
     st.session_state.uploaded_file_names = []
 
+st.markdown("# 📚 PDF Chatbot Pro")
+st.markdown('<p class="subtitle">Multi-Tenant High-Precision In-Memory Hybrid OCR Platform</p>', unsafe_allow_html=True)
+
 # =====================================================================
-# ⚡ IN-MEMORY TEXT EXTRACTION PIPELINE (No Disk Permissions Needed)
+# ⚡ HYBRID IN-MEMORY OCR PIPELINE (Handles Text & Image PDFs)
 # =====================================================================
 def process_pdfs_in_memory(uploaded_files):
+    ocr_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.0)
     all_documents = []
     
     for uploaded_file in uploaded_files:
@@ -111,16 +169,41 @@ def process_pdfs_in_memory(uploaded_files):
             file_bytes = uploaded_file.read()
             pdf_stream = io.BytesIO(file_bytes)
             doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            total_pages = len(doc)
             
-            for page_num in range(len(doc)):
+            ocr_progress = st.progress(0, text=f"🔮 Executing Hybrid Extraction: `{uploaded_file.name}`...")
+            
+            for page_num in range(total_pages):
                 page = doc.load_page(page_num)
                 text = page.get_text()
+                
+                # 🚨 OCR TRIGGER condition: Native text layer is empty (Scanned/Image PDF)
+                if len(text.strip()) < 15:
+                    # Render page to low-footprint optimized JPEG canvas image
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                    img_data = pix.tobytes("jpeg")
+                    
+                    base64_encoded = base64.b64encode(img_data).decode("utf-8")
+                    data_uri = f"data:image/jpeg;base64,{base64_encoded}"
+                    
+                    prompt = (
+                        "Extract all embedded visible textual content from this scanned document canvas exactly as it appears. "
+                        "Maintain logical structure. Support both English and Bengali Unicode perfectly. Do not include commentary."
+                    )
+                    message = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": data_uri}} ]
+                    
+                    time.sleep(0.5)  # Enforce safety space for Free-Tier Quotas
+                    text = ocr_model.invoke([("user", message)]).content
+                
                 if text.strip():
                     all_documents.append(Document(
                         page_content=text,
-                        metadata={"source": uploaded_file.name, "page": page_num + 1}
+                        metadata={"source": uploaded_file.name, "page": page_num + 1, "user_id": USER_ID}
                     ))
+                ocr_progress.progress(int((page_num + 1) / total_pages * 100), text=f"🔮 Parsed page {page_num + 1}/{total_pages}")
+            
             doc.close()
+            ocr_progress.empty()
         except Exception as e:
             st.error(f"Error parsing {uploaded_file.name}: {str(e)}")
             
@@ -131,7 +214,7 @@ def process_pdfs_in_memory(uploaded_files):
     chunks = text_splitter.split_documents(all_documents)
     
     if not chunks:
-        st.error("🚨 PDF থেকে কোনো টেক্সট পাওয়া যায়নি।")
+        st.error("🚨 PDF থেকে কোনো টেক্সট পাওয়া যায়নি।")
         return st.session_state.vectorstore
         
     progress_bar = st.progress(0, text="Synchronizing State-Locked Database...")
@@ -176,6 +259,14 @@ def delete_individual_file(filename_to_delete):
 # 🎛️ SIDEBAR CONTROL PANEL
 # =====================================================================
 with st.sidebar:
+    st.markdown(f"👤 **Tenant Auth Nodes:**\n`{st.session_state.user_info.email}`")
+    if st.button("🚪 Logout Engine", key="logout_btn", type="secondary"):
+        supabase.auth.sign_out()
+        st.session_state.logged_in = False
+        st.session_state.user_info = None
+        st.rerun()
+        
+    st.markdown("---")
     st.markdown("## 📂 Storage Control Panel")
     
     uploaded_files = st.file_uploader(
